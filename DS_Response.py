@@ -7,11 +7,30 @@ import pytz
 import platform
 import configparser
 import re
+from enum import IntEnum
 import ast
-
 
 from .DS_Requests import TokenRequest, Instrument, Properties, DataRequest, DataType, Date
 from .DSUserDataObjectBase import DSUserObjectFault, DSPackageInfo, DSUserObjectLogLevel, DSUserObjectLogFuncs
+
+class DSSymbolResponseValueType(IntEnum):
+    Error = 0
+    Empty = 1
+    Bool = 2
+    Int = 3
+    DateTime = 4
+    Double = 5
+    String = 6
+    BoolArray = 7
+    IntArray = 8
+    DateTimeArray = 9
+    DoubleArray = 10
+    StringArray = 11
+    ObjectArray = 12
+    NullableBoolArray = 13
+    NullableIntArray = 14
+    NullableDateTimeArray = 15
+    NullableDoubleArray = 16
 
 #--------------------------------------------------------------------------------------
 class DataClient:
@@ -46,7 +65,7 @@ class DataClient:
         """
 
         # Properties
-        self.url = "https://product.datastream.com" # Warning: Only override the url for the API service if directed to by Refinitiv.
+        self.url = "https://product.datastream.com" # Warning: Only override the url for the API service if directed to by LSEG.
         self.username = None
         self.password = None
         self.token = None # when you logon your token for subsequent queries is stored here
@@ -65,7 +84,7 @@ class DataClient:
             parser = configparser.ConfigParser()
             parser.read(config)
 
-            # Warning: Only override the url for the API service if directed to by Refinitiv.
+            # Warning: Only override the url for the API service if directed to by LSEG.
             if parser.has_option('url', 'path'):
                 self.url = self.url if parser.get('url', 'path').strip() == '' else parser.get('url', 'path').strip()
                 self.url = self.url.lower()
@@ -423,9 +442,10 @@ class DataClient:
             
     
     def _get_DatatypeValues(self, jsonResp):
-        df = pd.DataFrame()
         multiIndex = False
+        df = pd.DataFrame()
         valDict = {"Instrument":[],"Datatype":[],"Value":[],"Currency":[]}
+
         for item in jsonResp['DataTypeValues']: 
             datatype = item['DataType']
             
@@ -442,64 +462,53 @@ class DataClient:
                    colNames = (instrument, datatype, currency)
                else:
                    colNames = (instrument, datatype)
+
                values = i['Value']
                valType = i['Type']
-               df[colNames] = None
-               
+
                #Handling all possible types of data as per DSSymbolResponseValueType
-               if valType in [7, 8, 10, 11, 12, 13, 14, 15, 16]:
-                   #These value types return an array
-                   #The array can be of double, int, string or Object
-                   rowCount = df.shape[0]
-                   valLen = len(values)
-                   #If no of Values is < rowcount, append None to values
-                   if rowCount > valLen:
-                       for i in range(rowCount - valLen):
-                            values.append(None)
-                  #Check if the array of Object is JSON dates and convert
-                   for x in range(0, valLen):
-                       values[x] = self._get_Date(values[x]) if str(values[x]).find('/Date(') != -1 else values[x] 
-                   #Check for number of values in the array. If only one value, put in valDict
-                   if len(values) > 1:
-                       multiIndex = True
-                       df[colNames] = values
-                   else:
-                       multiIndex = False
-                       valDict["Value"].append(values[0])   
-               elif valType in [1, 2, 3, 5, 6]:
-                   #These value types return single value
-                   valDict["Value"].append(values)
-                   multiIndex = False
-               else:
-                   if valType == 4:
-                       #value type 4 return single JSON date value, which needs conversion
-                       values = self._get_Date(values) if str(values).find('/Date(') != -1 else values
-                       valDict["Value"].append(values)
-                       multiIndex = False
-                   elif valType == 9:
-                       #value type 9 return array of JSON date values, needs conversion
-                       date_array = []
-                       if len(values) > 1:
-                          multiIndex = True
-                          for eachVal in values:
-                              date_array.append(self._get_Date(eachVal)) if str(eachVal).find('/Date(') != -1 else eachVal 
-                          df[colNames] = date_array
-                       else:
-                          multiIndex = False
-                          date_array.append(self._get_Date(values[0])) if str(values[0]).find('/Date(') != -1 else values[0]
-                          valDict["Value"].append(date_array[0])
-                   else:
-                       if valType == 0:
-                           #Error Returned
-                           #12/12/2019 - Error returned can be array or a single 
-                           #multiIndex = False
-                           valDict["Value"].append(values)
-                           df[colNames] = values
-               if multiIndex:
-                   if currency:
-                        df.columns = pd.MultiIndex.from_tuples(df.columns, names=['Instrument','Field','Currency'])
-                   else:
-                        df.columns = pd.MultiIndex.from_tuples(df.columns, names=['Instrument','Field'])
+
+               #These value types return an array
+               if valType in [DSSymbolResponseValueType.BoolArray, 
+                              DSSymbolResponseValueType.IntArray, 
+                              DSSymbolResponseValueType.DateTimeArray,
+                              DSSymbolResponseValueType.DoubleArray,
+                              DSSymbolResponseValueType.StringArray,
+                              DSSymbolResponseValueType.ObjectArray,
+                              DSSymbolResponseValueType.NullableBoolArray,
+                              DSSymbolResponseValueType.NullableIntArray,
+                              DSSymbolResponseValueType.NullableDateTimeArray,
+                              DSSymbolResponseValueType.NullableDoubleArray]:
+                    #The array can be of bool, double, int, string, dates or Object
+
+                    #Check if the array of has JSON date string and convert each to Datetime
+                    temp = [self._get_Date(x) if isinstance(x, str) and x.startswith('/Date(') else x for x in values]
+                    df[colNames] = temp
+
+                    if len(values) > 1:
+                        multiIndex = True
+                    else:
+                        multiIndex = False
+                        valDict["Value"].append(values[0])  
+
+               #These value types return single value
+               elif valType in [DSSymbolResponseValueType.Empty,
+                                DSSymbolResponseValueType.Bool,
+                                DSSymbolResponseValueType.Int,
+                                DSSymbolResponseValueType.DateTime,
+                                DSSymbolResponseValueType.Double,
+                                DSSymbolResponseValueType.String]:
+                   temp = self._get_Date(values) if isinstance(values, str) and values.startswith('/Date(') else values 
+                   valDict["Value"].append(temp)
+               elif valType == DSSymbolResponseValueType.Error:
+                     #Error Returned
+                     valDict["Value"].append(values)
+
+        if multiIndex:
+            if currency:
+                 df.columns = pd.MultiIndex.from_tuples(df.columns, names=['Instrument','Field','Currency'])
+            else:
+                 df.columns = pd.MultiIndex.from_tuples(df.columns, names=['Instrument','Field'])
                    
         if not multiIndex:
             indexLen = range(len(valDict['Instrument']))

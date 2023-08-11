@@ -78,7 +78,7 @@ class DSConnect:
         """
 
         # Properties
-        self.url = "https://product.datastream.com" # Warning: Only override the url for the API service if directed to by Refinitiv.
+        self.url = "https://product.datastream.com" # Warning: Only override the url for the API service if directed to by LSEG.
         self.username = None
         self.password = None
         self.token = None # when you logon your token for subsequent queries is stored here
@@ -99,7 +99,7 @@ class DSConnect:
             parser = configparser.ConfigParser()
             parser.read(config)
 
-            # Warning: Only override the url for the API service if directed to by Refinitiv.
+            # Warning: Only override the url for the API service if directed to by LSEG.
             if parser.has_option('url', 'path'):
                 self.url = self.url if parser.get('url', 'path').strip() == '' else parser.get('url', 'path').strip()
                 self.url = self.url.lower()
